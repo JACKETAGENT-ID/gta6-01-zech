@@ -1,142 +1,136 @@
-'use strict';
-// Wanted level + sheriff response: chase cars, roadblocks, arrest on foot.
-// Wanted decays when the player stays clean and out of sight.
-CH.policeCars = [];
-CH.roadblocks = [];
-CH.wantedTimer = 0;
-CH.arrestT = 0;
-CH.roadblockCooldown = 0;
+// Wanted system: 0-5 stars, sheriff cars chase, roadblocks at 3+ stars,
+// and arrest when a sheriff catches Rook standing still or on foot.
+import { WORLD, ROADS_X, ROADS_Y } from './config.js';
+import { clamp, angleDiff } from './rng.js';
+import { makeSheriffCar } from './vehicles.js';
+import { collideBuildings } from './world.js';
 
-CH.setWanted = function (n, reason) {
-  var G = CH.G;
-  n = CH.clamp(n, 0, 5);
-  if (n > G.wanted) {
-    G.wanted = n;
-    CH.wantedTimer = 0;
-    if (n >= 2) CH.showMsg('Sheriff mengejarmu! Wanted ' + n + ' bintang.');
-  } else if (n < G.wanted) {
-    G.wanted = n;
-  }
-};
+export function wantedTarget(G) {
+  return Math.min(5, G.wanted);
+}
 
-CH.spawnPoliceCar = function () {
-  var G = CH.G;
-  var p = CH.randomRoadPoint();
-  // Spawn on a road near the player but off-screen.
-  for (var tries = 0; tries < 12; tries++) {
-    var a = CH.rand(0, Math.PI * 2), d = CH.rand(700, 1100);
-    var x = G.player.x + Math.cos(a) * d, y = G.player.y + Math.sin(a) * d;
-    x = CH.clamp(x, 60, CH.WORLD_W - 60); y = CH.clamp(y, 60, CH.WORLD_H - 60);
-    if (CH.pointOnRoad(x, y, 0)) { p = { x: x, y: y }; break; }
-  }
-  var v = CH.makeVehicle('police', p.x, p.y, 0, { driver: 'police', ai: 'chase' });
-  v.speed = 300;
-  CH.policeCars.push(v);
-  return v;
-};
-
-CH.spawnRoadblock = function () {
-  var G = CH.G;
-  var v = G.player.vehicle;
-  var fx = G.player.x, fy = G.player.y;
-  var ang = v ? v.angle : G.player.angle;
-  var bx = fx + Math.cos(ang) * 420, by = fy + Math.sin(ang) * 420;
-  bx = CH.clamp(bx, 80, CH.WORLD_W - 80); by = CH.clamp(by, 80, CH.WORLD_H - 80);
-  var block = { x: bx, y: by, angle: ang + Math.PI / 2, cars: [], t: 0 };
-  var c1 = CH.makeVehicle('police', bx + Math.cos(block.angle) * 40, by + Math.sin(block.angle) * 40, block.angle, { driver: 'roadblock', ai: 'block' });
-  var c2 = CH.makeVehicle('police', bx - Math.cos(block.angle) * 40, by - Math.sin(block.angle) * 40, block.angle, { driver: 'roadblock', ai: 'block' });
-  c1.speed = 0; c2.speed = 0;
-  block.cars = [c1, c2];
-  CH.roadblocks.push(block);
-  CH.showMsg('ROADBLOCK di depan! Cari jalan lain atau terobos.');
-  CH.Audio.sfx('busted');
-};
-
-CH.updatePolice = function (dt) {
-  var G = CH.G;
-  if (G.state !== 'playing') return;
-  CH.roadblockCooldown -= dt;
-  // Wanted decay: 25 clean seconds drops one star.
+export function updatePolice(G, dt) {
+  const p = G.player;
+  // Wanted decays slowly when no crime has happened lately.
   if (G.wanted > 0) {
-    CH.wantedTimer += dt;
-    if (CH.wantedTimer > 25) {
-      CH.wantedTimer = 0;
-      CH.setWanted(G.wanted - 1);
-      if (G.wanted === 0) CH.showMsg('Kamu lolos. Wanted bersih.');
+    G.wantedTimer += dt;
+    if (G.wantedTimer > 28) {
+      G.wanted--;
+      G.wantedTimer = 0;
+      if (G.wanted === 0) G.addMessage('The heat is off. For now.');
     }
   }
-  // Keep the right number of cruisers on the road.
-  var want = G.wanted > 0 ? Math.min(G.wanted * 2, 8) : 0;
-  var active = CH.policeCars.filter(function (v) { return !v.dead; }).length;
-  if (active < want && G.wanted > 0) CH.spawnPoliceCar();
-  if (active > want) {
-    var extra = CH.policeCars.filter(function (v) { return !v.dead; })[want];
-    if (extra) { extra.dead = true; }
+  // Spawn sheriff cars up to the wanted level.
+  const cops = G.police.filter(c => c.kind === 'police');
+  if (cops.length < wantedTarget(G) && G.spawnCooldown <= 0) {
+    const a = Math.random() * Math.PI * 2;
+    const sx = clamp(p.x + Math.cos(a) * 700, 80, WORLD.w - 80);
+    const sy = clamp(p.y + Math.sin(a) * 700, 80, WORLD.h - 80);
+    const cop = makeSheriffCar(sx, sy, 0);
+    cop.speed = 200;
+    G.police.push(cop);
+    G.spawnCooldown = 4;
   }
-  // Roadblocks at wanted 3+.
-  if (G.wanted >= 3 && CH.roadblocks.length === 0 && CH.roadblockCooldown <= 0) {
-    CH.spawnRoadblock();
-    CH.roadblockCooldown = 30;
-  }
-  // Chase AI.
-  for (var i = 0; i < CH.policeCars.length; i++) {
-    var pv = CH.policeCars[i];
-    if (pv.dead) continue;
-    var d = CH.dist(pv.x, pv.y, G.player.x, G.player.y);
-    var wantA = Math.atan2(G.player.y - pv.y, G.player.x - pv.x);
-    var steer = CH.clamp(CH.angDiff(pv.angle, wantA) * 2.0, -1, 1);
-    var throttle = d > 90 ? 1 : 0.4;
-    if (d > 1400) { // too far: respawn closer
-      var np = CH.randomRoadPoint();
-      pv.x = np.x; pv.y = np.y; pv.speed = 300;
-    }
-    CH.drivePhysics(pv, throttle, steer, dt);
-    // Ram the player's car.
-    if (G.player.vehicle && d < (pv.len + G.player.vehicle.len) / 2 - 4) {
-      G.player.vehicle.health -= 10 * dt;
-      if (Math.abs(pv.speed - G.player.vehicle.speed) > 150) CH.shake(3);
-    }
-    // Arrest on foot: close and slow for 1.5 s.
-    if (!G.player.vehicle && d < 46) {
-      var pspeed = Math.hypot(G.player.vx || 0, G.player.vy || 0);
-      if (pspeed < 60) {
-        CH.arrestT += dt;
-        if (CH.arrestT > 1.5) { CH.busted(); return; }
-      } else CH.arrestT = 0;
-    }
-  }
-  // Roadblock lifetime: fade out after the player passes far away.
-  for (var r = 0; r < CH.roadblocks.length; r++) {
-    var rb = CH.roadblocks[r];
-    rb.t += dt;
-    if (rb.t > 40 || CH.dist(rb.x, rb.y, G.player.x, G.player.y) > 1600) {
-      rb.cars.forEach(function (c) { c.dead = true; });
-      CH.roadblocks.splice(r, 1); r--;
-    }
-  }
-  CH.policeCars = CH.policeCars.filter(function (v) { return !v.dead; });
-  CH.Audio.setSiren(G.wanted > 0 && CH.policeCars.length > 0);
-};
+  G.spawnCooldown = Math.max(0, G.spawnCooldown - dt);
 
-CH.busted = function () {
-  var G = CH.G;
-  if (G.state !== 'playing') return;
-  G.state = 'busted';
-  var fine = Math.min(G.money, 150);
-  G.money -= fine;
-  CH.Audio.sfx('busted');
-  CH.Audio.setSiren(false);
-  CH.showEnd('BUSTED', 'Sheriff menangkapmu di Copperhead County. Denda $' + fine + ' dipotong. Rook bebas lagi — untuk sekarang.');
-  CH.saveGame();
-};
+  // Chase: steer toward the player, ram on contact.
+  for (const cop of G.police) {
+    const dx = p.x - cop.x, dy = p.y - cop.y;
+    const d = Math.hypot(dx, dy);
+    const want = Math.atan2(dy, dx);
+    cop.angle += clamp(angleDiff(cop.angle, want), -cop.turn * dt, cop.turn * dt);
+    const targetSpeed = d > 420 ? cop.top : d > 120 ? cop.top * 0.85 : cop.top * 0.55;
+    cop.speed += clamp(targetSpeed - cop.speed, -320 * dt, 260 * dt);
+    const nx = cop.x + Math.cos(cop.angle) * cop.speed * dt;
+    const ny = cop.y + Math.sin(cop.angle) * cop.speed * dt;
+    const c = collideBuildings(G.world, nx, ny, cop.len / 2 - 4);
+    if (c.hit) cop.speed *= 0.5;
+    cop.x = clamp(c.x, 30, WORLD.w - 30);
+    cop.y = clamp(c.y, 30, WORLD.h - 30);
+    cop.flashT = (cop.flashT || 0) + dt;
+    // Ram the player's car or tackle Rook on foot.
+    if (d < 46) {
+      if (p.onFoot) {
+        cop.arrestT = (cop.arrestT || 0) + dt;
+        if (cop.arrestT > 1.2) { arrestPlayer(G); return; }
+      } else if (Math.abs(p.car.speed) < 25) {
+        cop.arrestT = (cop.arrestT || 0) + dt;
+        if (cop.arrestT > 2.0) { arrestPlayer(G); return; }
+      } else {
+        cop.arrestT = 0;
+        p.car.speed *= 0.94;
+        G.spawnParticles(cop.x, cop.y, '#ffd23c', 3);
+      }
+    } else {
+      cop.arrestT = 0;
+    }
+  }
+  // Remove cops once the wanted level drops to zero.
+  if (G.wanted === 0) {
+    G.police = G.police.filter(c => {
+      const d = Math.hypot(c.x - p.x, c.y - p.y);
+      return d < 500; // keep nearby ones briefly so they drive off
+    });
+    if (G.police.length > 0 && Math.random() < dt * 0.2) G.police.shift();
+  }
 
-CH.wasted = function () {
-  var G = CH.G;
-  if (G.state !== 'playing') return;
-  G.state = 'wasted';
-  CH.Audio.sfx('busted');
-  CH.Audio.setSiren(false);
-  CH.showEnd('WASTED', 'Rook tumbang di tengah gurun. Untung ada yang mengangkutmu ke klinik — tagihannya $100.');
-  G.money = Math.max(0, G.money - 100);
-  CH.saveGame();
-};
+  updateRoadblocks(G, dt);
+}
+
+function arrestPlayer(G) {
+  const p = G.player;
+  const fine = Math.min(200, Math.floor(p.cash * 0.25));
+  p.cash -= fine;
+  p.hp = 100;
+  G.wanted = 0;
+  G.police = [];
+  G.roadblocks = [];
+  if (p.car) { p.car = null; p.onFoot = true; }
+  p.x = 1220; p.y = 480; // sheriff office steps
+  G.mode = 'busted';
+  G.audio.busted();
+  G.stats.busted++;
+  G.bustedFine = fine;
+}
+
+function updateRoadblocks(G, dt) {
+  if (G.wanted < 3) { G.roadblocks = []; return; }
+  G.roadblockTimer -= dt;
+  if (G.roadblockTimer <= 0 && G.roadblocks.length < 2) {
+    // Block the road ahead of the player.
+    const p = G.player;
+    const ahead = p.car ? p.car.angle : p.angle;
+    const bx = clamp(p.x + Math.cos(ahead) * 420, 100, WORLD.w - 100);
+    const by = clamp(p.y + Math.sin(ahead) * 420, 100, WORLD.h - 100);
+    // Snap to the nearest road axis.
+    let rx = ROADS_X[0], ry = ROADS_Y[0];
+    for (const x of ROADS_X) if (Math.abs(x - bx) < Math.abs(rx - bx)) rx = x;
+    for (const y of ROADS_Y) if (Math.abs(y - by) < Math.abs(ry - by)) ry = y;
+    const vertical = Math.abs(rx - bx) < Math.abs(ry - by);
+    G.roadblocks.push({
+      x: vertical ? rx : bx, y: vertical ? by : ry,
+      vertical, t: 0,
+    });
+    G.roadblockTimer = 14;
+    G.addMessage('ROADBLOCK AHEAD — sheriff barricade on the road!');
+  }
+  for (const rb of G.roadblocks) rb.t += dt;
+  // Smashing through a roadblock in a car.
+  const p = G.player;
+  if (p.car) {
+    for (const rb of G.roadblocks) {
+      const dx = p.car.x - rb.x, dy = p.car.y - rb.y;
+      const hit = rb.vertical
+        ? Math.abs(dx) < 40 && Math.abs(dy) < 90
+        : Math.abs(dx) < 90 && Math.abs(dy) < 40;
+      if (hit && Math.abs(p.car.speed) > 140) {
+        G.roadblocks = G.roadblocks.filter(r => r !== rb);
+        p.car.speed *= 0.55;
+        G.spawnParticles(rb.x, rb.y, '#ff8c3c', 16);
+        G.addMessage('You smashed through the roadblock!');
+        G.wanted = Math.min(5, G.wanted + 1);
+        break;
+      }
+    }
+  }
+}

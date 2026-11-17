@@ -1,93 +1,89 @@
-'use strict';
-// Pedestrians: town folk walking the sidewalks, fleeing from gunfire and
-// speeding cars. Hitting one is a crime the sheriff notices.
-CH.peds = [];
-CH.PED_COLORS = ['#e8e8e8', '#d97ba8', '#3fa8a0', '#e8a13c', '#8a5fc9', '#5da85d', '#c94f3d', '#4d6a8a'];
+// 26 pedestrians wandering the sidewalks of Copperhead County.
+import { PED_COUNT, WORLD } from './config.js';
+import { mulberry32, pick, range, rangeInt, clamp } from './rng.js';
+import { collideBuildings, onRoadPoint } from './world.js';
 
-CH.makePed = function (x, y) {
-  var p = {
-    x: x, y: y, angle: CH.rand(0, Math.PI * 2), speed: CH.rand(35, 65),
-    state: 'walk', tx: x, ty: y, downT: 0, panic: 0,
-    shirt: CH.pick(CH.PED_COLORS), skin: CH.pick(['#e8b98a', '#c98a5f', '#8a5a3a', '#f2c9a0'])
-  };
-  CH.peds.push(p);
-  return p;
-};
+const SHIRTS = ['#c94f4f', '#4f7dc9', '#5aa85a', '#c9a24f', '#8a5fc9', '#4fb8c9', '#d97b4f', '#7d8a99'];
+const SKINS = ['#e8b98a', '#c98a5e', '#8a5e3a', '#f0c9a0'];
 
-CH.spawnPeds = function () {
-  CH.peds = [];
-  for (var i = 0; i < 26; i++) {
-    var pt = CH.randomRoadPoint();
-    var p = CH.makePed(pt.x + CH.rand(-40, 40), pt.y + CH.rand(-40, 40));
-    p.tx = pt.x; p.ty = pt.y;
+export function spawnPedestrians(G) {
+  const rng = mulberry32(G.world.seed + 31);
+  G.peds = [];
+  let guard = 0;
+  while (G.peds.length < PED_COUNT && guard++ < 4000) {
+    const x = range(rng, 80, WORLD.w - 80);
+    const y = range(rng, 80, WORLD.h - 80);
+    if (onRoadPoint(x, y)) continue;
+    if (G.world.buildings.some(b => x > b.x - 20 && x < b.x + b.w + 20 && y > b.y - 20 && y < b.y + b.h + 20)) continue;
+    G.peds.push({
+      x, y, tx: x, ty: y, angle: range(rng, 0, Math.PI * 2),
+      speed: range(rng, 28, 52), shirt: pick(rng, SHIRTS), skin: pick(rng, SKINS),
+      hp: 30, waitT: range(rng, 0, 3), walkPhase: range(rng, 0, 6.28),
+      scared: 0, dead: false,
+    });
   }
-};
+}
 
-CH.updatePeds = function (dt) {
-  var G = CH.G;
-  for (var i = 0; i < CH.peds.length; i++) {
-    var p = CH.peds[i];
-    if (p.state === 'down') {
-      p.downT -= dt;
-      if (p.downT <= 0) { p.state = 'walk'; p.x += CH.rand(-200, 200); p.y += CH.rand(-200, 200); }
+function pickTarget(G, ped, rng) {
+  // Walk to a nearby sidewalk point (just off a road).
+  for (let tries = 0; tries < 12; tries++) {
+    const a = range(rng, 0, Math.PI * 2);
+    const d = range(rng, 120, 420);
+    const x = clamp(ped.x + Math.cos(a) * d, 60, WORLD.w - 60);
+    const y = clamp(ped.y + Math.sin(a) * d, 60, WORLD.h - 60);
+    if (onRoadPoint(x, y)) continue;
+    if (G.world.buildings.some(b => x > b.x - 16 && x < b.x + b.w + 16 && y > b.y - 16 && y < b.y + b.h + 16)) continue;
+    ped.tx = x; ped.ty = y;
+    return;
+  }
+  ped.waitT = 2;
+}
+
+export function updatePedestrians(G, dt) {
+  const rng = G.pedRng;
+  const p = G.player;
+  for (const ped of G.peds) {
+    if (ped.dead) continue;
+    ped.scared = Math.max(0, ped.scared - dt);
+    ped.waitT = Math.max(0, ped.waitT - dt);
+    // Flee from gunfire or a speeding car nearby.
+    const threat = G.bullets.length > 0 && Math.hypot(ped.x - p.x, ped.y - p.y) < 320;
+    const carNear = p.car && Math.hypot(ped.x - p.car.x, ped.y - p.car.y) < 90 && Math.abs(p.car.speed) > 120;
+    if ((threat || carNear) && ped.scared <= 0) {
+      ped.scared = 2.5;
+      const a = Math.atan2(ped.y - p.y, ped.x - p.x);
+      ped.tx = clamp(ped.x + Math.cos(a) * 260, 60, WORLD.w - 60);
+      ped.ty = clamp(ped.y + Math.sin(a) * 260, 60, WORLD.h - 60);
+    }
+    const dx = ped.tx - ped.x, dy = ped.ty - ped.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 14 || ped.waitT > 0) {
+      if (ped.waitT <= 0 && d < 14) {
+        ped.waitT = range(rng, 0.5, 3);
+        pickTarget(G, ped, rng);
+      }
       continue;
     }
-    var threat = null;
-    if (G.player.vehicle) {
-      var v = G.player.vehicle;
-      if (Math.abs(v.speed) > 200 && CH.dist(p.x, p.y, v.x, v.y) < 130) threat = { x: v.x, y: v.y };
-    }
-    if (G.gunshotT > 0 && CH.dist(p.x, p.y, G.player.x, G.player.y) < 320) threat = { x: G.player.x, y: G.player.y };
-    if (threat || p.state === 'flee') {
-      p.state = 'flee'; p.panic = 2.5;
-      var away = Math.atan2(p.y - (threat ? threat.y : G.player.y), p.x - (threat ? threat.x : G.player.x));
-      p.angle = away;
-      p.x += Math.cos(away) * 150 * dt;
-      p.y += Math.sin(away) * 150 * dt;
-      p.panic -= dt;
-      if (p.panic <= 0) p.state = 'walk';
-    } else {
-      var d = CH.dist(p.x, p.y, p.tx, p.ty);
-      if (d < 24) {
-        var np = CH.randomRoadPoint();
-        p.tx = np.x; p.ty = np.y;
-      } else {
-        p.angle = Math.atan2(p.ty - p.y, p.tx - p.x);
-        p.x += Math.cos(p.angle) * p.speed * dt;
-        p.y += Math.sin(p.angle) * p.speed * dt;
-      }
-    }
-    if (CH.collidesBuilding(p.x, p.y, 8)) { p.x -= Math.cos(p.angle) * p.speed * dt * 2; p.y -= Math.sin(p.angle) * p.speed * dt * 2; }
-    p.x = CH.clamp(p.x, 20, CH.WORLD_W - 20);
-    p.y = CH.clamp(p.y, 20, CH.WORLD_H - 20);
-  }
-  // Player's car hitting a pedestrian.
-  if (G.player.vehicle) {
-    var v = G.player.vehicle;
-    for (var j = 0; j < CH.peds.length; j++) {
-      var pd = CH.peds[j];
-      if (pd.state === 'down') continue;
-      if (CH.circleRect(pd.x, pd.y, 10, v.x - v.len / 2, v.y - v.wid / 2, v.len, v.wid) && Math.abs(v.speed) > 40) {
-        pd.state = 'down'; pd.downT = 4;
-        CH.setWanted(Math.min(5, G.wanted + 1), 'hit-ped');
-        CH.showMsg('Kamu menabrak pejalan kaki! Wanted naik.');
-        CH.Audio.sfx('crash'); CH.shake(5);
-        CH.spawnBurst(pd.x, pd.y, 8, '#c94f3d');
-      }
+    const spd = ped.speed * (ped.scared > 0 ? 2.4 : 1);
+    ped.x += (dx / d) * spd * dt;
+    ped.y += (dy / d) * spd * dt;
+    ped.angle = Math.atan2(dy, dx);
+    ped.walkPhase += dt * (ped.scared > 0 ? 14 : 7);
+    const c = collideBuildings(G.world, ped.x, ped.y, 11);
+    ped.x = c.x; ped.y = c.y;
+    // Run over by a car: knocked down, raises wanted.
+    if (p.car && Math.hypot(ped.x - p.car.x, ped.y - p.car.y) < 26 && Math.abs(p.car.speed) > 90) {
+      killPed(G, ped, 'run over');
     }
   }
-};
+}
 
-CH.drawPed = function (c, p) {
-  c.save();
-  c.translate(p.x, p.y);
-  if (p.state === 'down') { c.rotate(Math.PI / 2); c.globalAlpha = 0.7; }
-  else c.rotate(p.angle);
-  c.fillStyle = 'rgba(0,0,0,0.3)';
-  c.beginPath(); c.ellipse(0, 2, 9, 7, 0, 0, Math.PI * 2); c.fill();
-  c.fillStyle = p.shirt;
-  c.fillRect(-6, -5, 12, 10);
-  c.fillStyle = p.skin;
-  c.beginPath(); c.arc(8, 0, 5, 0, Math.PI * 2); c.fill();
-  c.restore();
-};
+export function killPed(G, ped, how) {
+  if (ped.dead) return;
+  ped.dead = true;
+  G.wanted = Math.min(5, G.wanted + 2);
+  G.wantedTimer = 0;
+  G.stats.pedsDown++;
+  G.addMessage('Pedestrian ' + how + ' — wanted up!');
+  G.spawnParticles(ped.x, ped.y, '#c94f4f', 10);
+}

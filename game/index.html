@@ -1,96 +1,27 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Copperhead County — Open-World Crime Game</title>
+<title>Copperhead County — an open-world crime game</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <div id="wrap">
-  <canvas id="game" width="1280" height="800"></canvas>
-
-  <div id="hud">
-    <div id="topLeft">
-      <div id="wantedLabel">WANTED <span id="stars">☆☆☆☆☆</span></div>
-      <div id="healthBar"><div id="healthFill"></div></div>
-      <div id="carHealth"><div id="carFill"></div></div>
-      <div id="moneyRow"><span id="money">$0</span> <span id="ammo">AMMO 24</span></div>
-      <div id="collect">NUGGET 0/20</div>
-    </div>
-    <div id="topRight">
-      <canvas id="minimap" width="200" height="150"></canvas>
-      <div id="clock">10:00 AM</div>
-      <div id="radio">KCOY 88.1 — Desert Country</div>
-    </div>
-    <div id="objective">Bebas — jelajahi Copperhead County</div>
-    <div id="speed"></div>
-  </div>
-
-  <div id="msg"></div>
-
-  <div id="dialog" style="display:none">
-    <div id="dialogText"></div>
-    <div id="dialogHint">ENTER / klik — lanjut</div>
-  </div>
-
-  <div id="startScreen">
-    <div class="titleBox">
-      <h1>COPPERHEAD<br>COUNTY</h1>
-      <p class="tagline">Kota kecil. Highway gurun. Strip kasino. Satu sopir pelarian yang berutang.</p>
-      <p class="story">Rook Calloway berutang $4.000 pada Vera Voss dari The Copper Spur.
-        Enam kerja. Enam kesempatan untuk lunas — atau tertangkap sheriff.</p>
-      <div class="buttons">
-        <button id="newGameBtn">▶ NEW GAME</button>
-        <button id="continueBtn">↻ CONTINUE</button>
-      </div>
-      <div class="controls">
-        <b>CARA MAIN</b><br>
-        WASD / panah — jalan &amp; nyetir &nbsp;·&nbsp; E — masuk / keluar mobil<br>
-        Klik mouse — tembak &nbsp;·&nbsp; Spasi — pukul &nbsp;·&nbsp; R — ganti radio<br>
-        P — jeda &nbsp;·&nbsp; M — bisu &nbsp;·&nbsp; Enter — lanjut dialog<br>
-        Curi mobil, hindari sheriff, selesaikan 6 misi, kumpulkan 20 nugget tembaga.
-      </div>
-      <p class="credit">Game orisinal — kota, karakter, dan cerita buatan sendiri. Tanpa aset Rockstar.</p>
-    </div>
-  </div>
-
-  <div id="pauseScreen" style="display:none">
-    <div class="titleBox">
-      <h2>JEDA</h2>
-      <p class="tagline">Gurun menunggu. Sheriff tidak.</p>
-      <div class="buttons">
-        <button id="resumeBtn">▶ LANJUT</button>
-        <button id="quitBtn">■ MENU UTAMA</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="endScreen" style="display:none">
-    <div class="titleBox">
-      <h2 id="endTitle">BUSTED</h2>
-      <p id="endText" class="story"></p>
-      <div class="buttons">
-        <button id="endBtn">■ MENU UTAMA</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="errlog" style="display:none"></div>
+  <canvas id="game" width="1280" height="720"></canvas>
+  <div id="errlog" aria-hidden="true"></div>
 </div>
-<script src="js/util.js"></script>
-<script src="js/world.js"></script>
-<script src="js/audio.js"></script>
-<script src="js/vehicles.js"></script>
-<script src="js/pedestrians.js"></script>
-<script src="js/police.js"></script>
-<script src="js/missions.js"></script>
-<script src="js/player.js"></script>
-<script src="js/effects.js"></script>
-<script src="js/hud.js"></script>
-<script src="js/save.js"></script>
-<script src="js/input.js"></script>
-<script src="js/render.js"></script>
-<script src="js/main.js"></script>
+<script>
+window.__errors = [];
+window.addEventListener('error', function (e) {
+  window.__errors.push(String(e.message || e.error));
+  var d = document.getElementById('errlog');
+  if (d) d.textContent = window.__errors.join('\n');
+});
+window.addEventListener('unhandledrejection', function (e) {
+  window.__errors.push('rejection: ' + String(e.reason));
+});
+</script>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

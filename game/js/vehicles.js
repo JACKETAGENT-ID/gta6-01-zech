@@ -1,273 +1,167 @@
-'use strict';
-// Vehicles: five civilian types plus police. Arcade top-down physics, traffic AI,
-// parked cars, stealing. Every vehicle is drawn from code, no images.
-CH.VEHICLE_TYPES = {
-  sedan:      { len: 46, wid: 22, maxSpeed: 520, accel: 430, turn: 2.4, color: '#c94f3d', health: 100 },
-  pickup:     { len: 52, wid: 24, maxSpeed: 480, accel: 400, turn: 2.2, color: '#3d7ac9', health: 120 },
-  motorcycle: { len: 34, wid: 12, maxSpeed: 640, accel: 560, turn: 3.1, color: '#e8a13c', health: 60 },
-  bus:        { len: 78, wid: 28, maxSpeed: 340, accel: 260, turn: 1.7, color: '#e8d44d', health: 200 },
-  van:        { len: 58, wid: 26, maxSpeed: 430, accel: 350, turn: 2.0, color: '#8a8f96', health: 150 },
-  police:     { len: 48, wid: 23, maxSpeed: 570, accel: 500, turn: 2.6, color: '#f2f2f2', health: 140 }
-};
-CH.CAR_COLORS = ['#c94f3d', '#3d7ac9', '#e8a13c', '#5da85d', '#8a5fc9', '#c9c9c9', '#4d4d55', '#d97ba8', '#3fa8a0'];
-CH.vehicles = [];
-CH.vehicleSeq = 0;
+// Vehicles: five stealable types, traffic on three loops, driving physics,
+// stealing (E), entering/exiting, and car-vs-building collision.
+import { VEHICLE_TYPES, SHERIFF_CAR, WORLD } from './config.js';
+import { mulberry32, pick, range, angleDiff, clamp } from './rng.js';
+import { collideBuildings } from './world.js';
 
-CH.makeVehicle = function (type, x, y, angle, opts) {
-  opts = opts || {};
-  var t = CH.VEHICLE_TYPES[type];
-  var v = {
-    id: ++CH.vehicleSeq, type: type, x: x, y: y, angle: angle || 0,
-    speed: 0, health: t.health, maxHealth: t.health,
-    len: t.len, wid: t.wid, maxSpeed: t.maxSpeed, accel: t.accel, turn: t.turn,
-    color: opts.color || (type === 'police' ? '#f2f2f2' : CH.pick(CH.CAR_COLORS)),
-    driver: opts.driver || 'parked', loop: opts.loop || 0, wp: opts.wp || 0,
-    lane: opts.lane || (CH.rng() > 0.5 ? 18 : -18), cruise: CH.rand(170, 250),
-    ai: opts.ai || null, dead: false, smoke: 0
+let carId = 1;
+
+export function makeCar(type, x, y, angle, kind) {
+  const t = VEHICLE_TYPES[type] || VEHICLE_TYPES.sedan;
+  return {
+    id: carId++, type, kind: kind || 'traffic',
+    x, y, angle, speed: 0,
+    top: t.top, accel: t.accel, turn: t.turn, len: t.len, wid: t.wid,
+    color: t.color, parked: kind === 'parked',
+    loop: 0, wp: 0, stopT: 0, hornT: 0,
   };
-  CH.vehicles.push(v);
-  return v;
-};
+}
 
-CH.spawnTraffic = function () {
-  CH.vehicles = [];
-  for (var i = 0; i < 14; i++) {
-    var loop = CH.TRAFFIC_LOOPS[i % CH.TRAFFIC_LOOPS.length];
-    var wp = Math.floor(i / CH.TRAFFIC_LOOPS.length) % loop.length;
-    var p = loop[wp];
-    var q = loop[(wp + 1) % loop.length];
-    var a = Math.atan2(q[1] - p[1], q[0] - p[0]);
-    var types = ['sedan', 'sedan', 'pickup', 'van', 'bus', 'motorcycle'];
-    var v = CH.makeVehicle(CH.pick(types), p[0] + CH.rand(-30, 30), p[1] + CH.rand(-30, 30), a,
-      { driver: 'traffic', loop: i % CH.TRAFFIC_LOOPS.length, wp: wp });
-    v.speed = v.cruise;
-  }
-  // Parked cars along town streets.
-  var spots = [[530, 470], [930, 830], [1330, 470], [1730, 1230], [930, 1230], [1330, 1630], [530, 1230], [1730, 830]];
-  for (var s = 0; s < spots.length; s++) {
-    CH.makeVehicle(CH.pick(['sedan', 'pickup', 'van']), spots[s][0], spots[s][1], (s % 2 === 0) ? 0 : Math.PI / 2, { driver: 'parked' });
-  }
-  // The getaway van for the final mission waits at the junkyard.
-  CH.makeVehicle('van', 300, 1930, 0, { driver: 'parked', color: '#5a3d7a' });
-};
+export function makeSheriffCar(x, y, angle) {
+  const c = makeCar('sedan', x, y, angle, 'police');
+  c.top = SHERIFF_CAR.top; c.accel = SHERIFF_CAR.accel; c.turn = SHERIFF_CAR.turn;
+  c.len = SHERIFF_CAR.len; c.wid = SHERIFF_CAR.wid;
+  c.color = '#f2efe6';
+  return c;
+}
 
-CH.nearestVehicle = function (x, y, maxD, exclude) {
-  var best = null, bd = maxD;
-  for (var i = 0; i < CH.vehicles.length; i++) {
-    var v = CH.vehicles[i];
-    if (v.dead || v === exclude) continue;
-    var d = CH.dist(x, y, v.x, v.y);
-    if (d < bd) { bd = d; best = v; }
+export function spawnTraffic(G) {
+  const rng = mulberry32(G.world.seed + 77);
+  const types = Object.keys(VEHICLE_TYPES);
+  G.cars = [];
+  // Moving traffic, spread over the three loops.
+  for (let i = 0; i < 15; i++) {
+    const loop = i % G.world.loops.length;
+    const path = G.world.loops[loop];
+    const wp = Math.floor(rng() * path.length);
+    const pt = path[wp];
+    const car = makeCar(pick(rng, types), pt.x + range(rng, -20, 20), pt.y + range(rng, -20, 20), 0, 'traffic');
+    car.loop = loop; car.wp = (wp + 1) % path.length;
+    car.speed = range(rng, 90, 150);
+    G.cars.push(car);
+  }
+  // Parked, stealable cars (includes the mission sedan and Vera's van).
+  for (const s of G.world.parkSpots) {
+    const car = makeCar(s.type, s.x, s.y, range(rng, 0, Math.PI * 2), 'parked');
+    car.color = s.color;
+    G.cars.push(car);
+  }
+}
+
+function steerToward(car, tx, ty, dt, reverse) {
+  const want = Math.atan2(ty - car.y, tx - car.x);
+  const d = angleDiff(car.angle, want);
+  car.angle += clamp(d, -car.turn * dt, car.turn * dt) * (reverse ? -1 : 1);
+  return d;
+}
+
+export function updateTraffic(G, dt) {
+  for (const car of G.cars) {
+    if (car.kind !== 'traffic') continue;
+    const path = G.world.loops[car.loop];
+    const target = path[car.wp];
+    const dx = target.x - car.x, dy = target.y - car.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 26) { car.wp = (car.wp + 1) % path.length; continue; }
+    // Stop for a car directly ahead (player or traffic).
+    let blocked = false;
+    for (const o of G.cars) {
+      if (o === car || o.kind === 'parked') continue;
+      const ox = o.x - car.x, oy = o.y - car.y;
+      const along = ox * Math.cos(car.angle) + oy * Math.sin(car.angle);
+      const side = Math.abs(-ox * Math.sin(car.angle) + oy * Math.cos(car.angle));
+      if (along > 0 && along < 70 && side < 26) { blocked = true; break; }
+    }
+    const p = G.player;
+    if (p.car) {
+      const ox = p.car.x - car.x, oy = p.car.y - car.y;
+      const along = ox * Math.cos(car.angle) + oy * Math.sin(car.angle);
+      const side = Math.abs(-ox * Math.sin(car.angle) + oy * Math.cos(car.angle));
+      if (along > 0 && along < 70 && side < 26) blocked = true;
+    }
+    car.stopT = blocked ? car.stopT + dt : 0;
+    const wantSpeed = blocked ? 0 : 120;
+    car.speed += clamp(wantSpeed - car.speed, -260 * dt, 150 * dt);
+    steerToward(car, target.x, target.y, dt, false);
+    car.x += Math.cos(car.angle) * car.speed * dt;
+    car.y += Math.sin(car.angle) * car.speed * dt;
+  }
+}
+
+// Player driving the car they are in.
+export function updateDriving(G, dt, input) {
+  const p = G.player;
+  if (p.onFoot || !p.car) return;
+  const car = p.car;
+  const fwd = input.down('KeyW', 'ArrowUp');
+  const back = input.down('KeyS', 'ArrowDown');
+  const left = input.down('KeyA', 'ArrowLeft');
+  const right = input.down('KeyD', 'ArrowRight');
+  if (fwd) car.speed += car.accel * dt;
+  else if (back) car.speed -= car.speed > 5 ? car.accel * 1.4 * dt : car.accel * 0.6 * dt;
+  else car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 140 * dt);
+  if (input.down('Space')) car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 420 * dt);
+  car.speed = clamp(car.speed, -car.top * 0.45, car.top);
+  const steer = (left ? -1 : 0) + (right ? 1 : 0);
+  if (steer !== 0 && Math.abs(car.speed) > 8) {
+    car.angle += steer * car.turn * dt * (car.speed >= 0 ? 1 : -1) * Math.min(1, Math.abs(car.speed) / 120);
+  }
+  const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+  const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+  const c = collideBuildings(G.world, nx, ny, car.len / 2 - 4);
+  if (c.hit) car.speed *= 0.45;
+  car.x = clamp(c.x, 30, WORLD.w - 30);
+  car.y = clamp(c.y, 30, WORLD.h - 30);
+  p.x = car.x; p.y = car.y; p.angle = car.angle;
+  // Nudge traffic cars we ram.
+  for (const o of G.cars) {
+    if (o === car || o.kind === 'parked') continue;
+    const dx = o.x - car.x, dy = o.y - car.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 48 && d > 0.1 && Math.abs(car.speed) > 60) {
+      o.x += (dx / d) * 26; o.y += (dy / d) * 26;
+      o.speed = Math.max(o.speed, 40);
+    }
+  }
+  G.audio.setEngine(Math.abs(car.speed) / car.top, true);
+}
+
+export function nearestCar(G, maxDist) {
+  const p = G.player;
+  let best = null, bestD = maxDist;
+  for (const car of G.cars) {
+    if (car.kind === 'police') continue;
+    const d = Math.hypot(car.x - p.x, car.y - p.y);
+    if (d < bestD) { bestD = d; best = car; }
   }
   return best;
-};
+}
 
-CH.drivePhysics = function (v, throttle, steer, dt) {
-  var onRoad = CH.pointOnRoad(v.x, v.y, 0);
-  var cap = v.maxSpeed * (onRoad ? 1 : 0.55);
-  if (throttle > 0) v.speed += v.accel * throttle * dt;
-  else if (throttle < 0) v.speed += v.accel * 0.7 * throttle * dt;
-  else v.speed -= Math.sign(v.speed) * Math.min(Math.abs(v.speed), 240 * dt);
-  if (v.speed > cap) v.speed = cap;
-  if (v.speed < -v.maxSpeed * 0.4) v.speed = -v.maxSpeed * 0.4;
-  var turnRate = v.turn * CH.clamp(v.speed / 220, -1, 1);
-  v.angle += steer * turnRate * dt;
-  var nx = v.x + Math.cos(v.angle) * v.speed * dt;
-  var ny = v.y + Math.sin(v.angle) * v.speed * dt;
-  var hit = CH.collidesBuilding(nx, ny, v.len / 2 - 4);
-  if (hit) {
-    if (Math.abs(v.speed) > 260 && v.driver === 'player') {
-      v.health -= Math.abs(v.speed) * 0.06;
-      CH.Audio.sfx('crash'); CH.shake(6);
-      CH.spawnBurst(v.x, v.y, 10, '#888888');
-    }
-    v.speed *= 0.35;
-  } else { v.x = nx; v.y = ny; }
-  v.x = CH.clamp(v.x, 30, CH.WORLD_W - 30);
-  v.y = CH.clamp(v.y, 30, CH.WORLD_H - 30);
-  if (v.health < 40) v.smoke += dt;
-  if (v.health <= 0 && !v.dead) CH.explodeVehicle(v);
-};
-
-CH.explodeVehicle = function (v) {
-  v.dead = true;
-  CH.spawnBurst(v.x, v.y, 40, '#ff7a2a');
-  CH.spawnBurst(v.x, v.y, 24, '#555555');
-  CH.Audio.sfx('crash'); CH.shake(14);
-  var G = CH.G;
-  if (G.player.vehicle === v) {
-    G.player.vehicle = null; G.player.onFoot = true;
-    G.player.x = v.x + 40; G.player.y = v.y;
-    G.player.health -= 25;
+// E near a car: enter it (stealing a parked/traffic car raises wanted).
+export function tryEnterCar(G) {
+  const p = G.player;
+  if (!p.onFoot) {
+    // Exit current car.
+    const car = p.car;
+    p.car = null; p.onFoot = true;
+    p.x = car.x + Math.cos(car.angle + Math.PI / 2) * 34;
+    p.y = car.y + Math.sin(car.angle + Math.PI / 2) * 34;
+    car.speed = 0;
+    G.audio.setEngine(0, false);
+    return 'exit';
   }
-};
-
-CH.updateTraffic = function (v, dt) {
-  var loop = CH.TRAFFIC_LOOPS[v.loop];
-  var tgt = loop[v.wp];
-  var dx = tgt[0] - v.x, dy = tgt[1] - v.y;
-  var d = Math.hypot(dx, dy);
-  if (d < 70) { v.wp = (v.wp + 1) % loop.length; return; }
-  var want = Math.atan2(dy, dx);
-  var steer = CH.clamp(CH.angDiff(v.angle, want) * 1.6, -1, 1);
-  var throttle = 1;
-  // Slow down for a vehicle ahead.
-  for (var i = 0; i < CH.vehicles.length; i++) {
-    var o = CH.vehicles[i];
-    if (o === v || o.dead) continue;
-    var od = CH.dist(v.x, v.y, o.x, o.y);
-    if (od < 70) {
-      var oa = Math.atan2(o.y - v.y, o.x - v.x);
-      if (Math.abs(CH.angDiff(v.angle, oa)) < 0.7) { throttle = 0; break; }
-    }
+  const car = nearestCar(G, 70);
+  if (!car) return null;
+  if (car.kind === 'parked' || car.kind === 'traffic') {
+    if (car.kind === 'traffic' && car.speed > 5) return 'moving';
+    p.car = car; p.onFoot = false;
+    car.kind = 'player';
+    car.parked = false;
+    G.wanted = Math.min(5, G.wanted + 1);
+    G.wantedTimer = 0;
+    G.stats.carsStolen++;
+    G.audio.click();
+    return 'steal';
   }
-  // Pedestrians in the way: stop.
-  for (var p = 0; p < CH.peds.length; p++) {
-    var pd = CH.peds[p];
-    if (pd.state === 'down') continue;
-    if (CH.dist(v.x, v.y, pd.x, pd.y) < 46) { throttle = 0; break; }
-  }
-  CH.drivePhysics(v, throttle, steer, dt);
-  // Keep traffic on the road: nudge back toward the loop if it drifted off.
-  if (!CH.pointOnRoad(v.x, v.y, 10)) {
-    v.angle += CH.angDiff(v.angle, want) * dt * 2;
-  }
-};
-
-CH.updateVehicles = function (dt) {
-  var G = CH.G;
-  for (var i = 0; i < CH.vehicles.length; i++) {
-    var v = CH.vehicles[i];
-    if (v.dead) continue;
-    if (v.driver === 'player') {
-      var inp = CH.input;
-      var throttle = (inp.up ? 1 : 0) + (inp.down ? -1 : 0);
-      var steer = (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
-      CH.drivePhysics(v, throttle, steer, dt);
-      G.player.x = v.x; G.player.y = v.y; G.player.angle = v.angle;
-      if (Math.abs(v.speed) > 60 && CH.rng() < 0.3) {
-        CH.spawnDust(v.x - Math.cos(v.angle) * v.len / 2, v.y - Math.sin(v.angle) * v.len / 2);
-      }
-    } else if (v.driver === 'traffic') {
-      CH.updateTraffic(v, dt);
-    }
-  }
-  // Car-car collisions: push apart, share the bump.
-  for (var a = 0; a < CH.vehicles.length; a++) {
-    for (var b = a + 1; b < CH.vehicles.length; b++) {
-      var va = CH.vehicles[a], vb = CH.vehicles[b];
-      if (va.dead || vb.dead) continue;
-      var d = CH.dist(va.x, va.y, vb.x, vb.y);
-      var min = (va.len + vb.len) / 2 - 8;
-      if (d > 0.01 && d < min) {
-        var push = (min - d) / 2;
-        var nx = (vb.x - va.x) / d, ny = (vb.y - va.y) / d;
-        va.x -= nx * push; va.y -= ny * push;
-        vb.x += nx * push; vb.y += ny * push;
-        var rel = Math.abs(va.speed - vb.speed);
-        if (rel > 200) {
-          va.health -= rel * 0.03; vb.health -= rel * 0.03;
-          if (va.driver === 'player' || vb.driver === 'player') { CH.Audio.sfx('crash'); CH.shake(4); }
-        }
-        va.speed *= 0.85; vb.speed *= 0.85;
-      }
-    }
-  }
-  CH.vehicles = CH.vehicles.filter(function (v) { return !v.dead || v.driver === 'player'; });
-};
-
-CH.enterVehicle = function (v) {
-  var G = CH.G;
-  if (v.driver === 'traffic') {
-    // Steal it: the driver flees on foot, the law notices.
-    var d = CH.makePed(v.x + 30, v.y + 10);
-    d.state = 'flee';
-    CH.setWanted(Math.min(5, CH.G.wanted + 1), 'steal');
-    CH.Audio.sfx('steal');
-    CH.showMsg('Mobil dicuri! Wanted naik.');
-  }
-  v.driver = 'player';
-  G.player.vehicle = v; G.player.onFoot = false;
-  G.player.x = v.x; G.player.y = v.y;
-  CH.Audio.setEngine(0, true);
-};
-
-CH.exitVehicle = function () {
-  var G = CH.G;
-  var v = G.player.vehicle;
-  if (!v) return;
-  v.driver = 'parked'; v.speed = 0;
-  G.player.vehicle = null; G.player.onFoot = true;
-  G.player.x = v.x + Math.cos(v.angle + Math.PI / 2) * 34;
-  G.player.y = v.y + Math.sin(v.angle + Math.PI / 2) * 34;
-};
-
-CH.drawVehicle = function (c, v) {
-  c.save();
-  c.translate(v.x, v.y);
-  c.rotate(v.angle);
-  var L = v.len, W = v.wid;
-  c.fillStyle = 'rgba(0,0,0,0.3)';
-  c.fillRect(-L / 2 + 3, -W / 2 + 4, L, W);
-  // wheels
-  c.fillStyle = '#161616';
-  var wl = L * 0.26, ww = 5;
-  c.fillRect(-L / 2 + 4, -W / 2 - 2, wl, ww); c.fillRect(-L / 2 + 4, W / 2 - 3, wl, ww);
-  c.fillRect(L / 2 - wl - 4, -W / 2 - 2, wl, ww); c.fillRect(L / 2 - wl - 4, W / 2 - 3, wl, ww);
-  if (v.type === 'motorcycle') {
-    c.fillStyle = v.color;
-    c.fillRect(-L / 2, -W / 2, L, W);
-    c.fillStyle = '#222';
-    c.beginPath(); c.arc(-2, 0, 6, 0, Math.PI * 2); c.fill();
-    c.fillStyle = '#e8c33c';
-    c.fillRect(L / 2 - 2, -3, 3, 6);
-  } else {
-    // body
-    c.fillStyle = v.color;
-    c.beginPath();
-    var r = 7;
-    c.moveTo(-L / 2 + r, -W / 2); c.lineTo(L / 2 - r, -W / 2); c.quadraticCurveTo(L / 2, -W / 2, L / 2, -W / 2 + r);
-    c.lineTo(L / 2, W / 2 - r); c.quadraticCurveTo(L / 2, W / 2, L / 2 - r, W / 2);
-    c.lineTo(-L / 2 + r, W / 2); c.quadraticCurveTo(-L / 2, W / 2, -L / 2, W / 2 - r);
-    c.lineTo(-L / 2, -W / 2 + r); c.quadraticCurveTo(-L / 2, -W / 2, -L / 2 + r, -W / 2);
-    c.fill();
-    // windshield + roof
-    c.fillStyle = 'rgba(20,30,45,0.85)';
-    c.fillRect(L * 0.08, -W / 2 + 3, L * 0.2, W - 6);
-    c.fillStyle = 'rgba(0,0,0,0.18)';
-    c.fillRect(-L * 0.28, -W / 2 + 3, L * 0.3, W - 6);
-    if (v.type === 'bus') {
-      c.fillStyle = 'rgba(20,30,45,0.8)';
-      for (var wnd = -3; wnd <= 3; wnd++) c.fillRect(wnd * 10 - 3, -W / 2 + 3, 6, 5);
-    }
-    if (v.type === 'police') {
-      c.fillStyle = '#1a1a1a'; c.fillRect(-L * 0.1, -W / 2 + 2, L * 0.24, W - 4);
-      var flash = (Math.floor(CH.G.time * 6) % 2 === 0);
-      c.fillStyle = flash ? '#ff2a2a' : '#2a6aff';
-      c.fillRect(-6, -W / 2 - 1, 12, 5);
-      c.fillStyle = flash ? '#2a6aff' : '#ff2a2a';
-      c.fillRect(-6, W / 2 - 4, 12, 5);
-      c.fillStyle = '#111'; c.font = 'bold 9px sans-serif'; c.textAlign = 'center';
-      c.fillText('SHERIFF', 0, 3);
-    }
-    if (v.type === 'pickup') {
-      c.fillStyle = 'rgba(0,0,0,0.25)';
-      c.fillRect(-L / 2 + 4, -W / 2 + 3, L * 0.3, W - 6);
-    }
-    // headlights
-    c.fillStyle = '#ffe9a8';
-    c.fillRect(L / 2 - 2, -W / 2 + 2, 3, 5); c.fillRect(L / 2 - 2, W / 2 - 7, 3, 5);
-    // damage smoke
-    if (v.health < 40) {
-      c.fillStyle = 'rgba(80,80,80,0.5)';
-      c.beginPath(); c.arc(-L / 4, 0, 6 + Math.random() * 4, 0, Math.PI * 2); c.fill();
-    }
-  }
-  c.restore();
-  // health bar for the player's car
-  if (v.driver === 'player' && v.health < v.maxHealth) {
-    c.fillStyle = 'rgba(0,0,0,0.5)'; c.fillRect(v.x - 24, v.y - v.wid / 2 - 12, 48, 5);
-    c.fillStyle = v.health > 50 ? '#5da85d' : '#c94f3d';
-    c.fillRect(v.x - 24, v.y - v.wid / 2 - 12, 48 * (v.health / v.maxHealth), 5);
-  }
-};
+  return null;
+}

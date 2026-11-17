@@ -1,53 +1,48 @@
-'use strict';
-// Save / load via localStorage. Progress: money, missions, nuggets, position.
-CH.SAVE_KEY = 'copperhead-county-save-v1';
+// Save / load through localStorage. Auto-saves after every mission.
+const KEY = 'copperhead-county-save-v1';
 
-CH.saveGame = function () {
-  var G = CH.G;
-  if (!G || !G.player) return;
+export function saveGame(G) {
   try {
-    var data = {
-      money: G.money,
-      missionsDone: G.missionsDone,
-      nuggets: G.nuggets,
-      nuggetIds: CH.COLLECTIBLES.filter(function (c) { return c.taken; }).map(function (c) { return c.id; }),
-      player: { x: G.player.x, y: G.player.y, health: G.player.health, ammo: G.player.ammo },
-      timeOfDay: G.timeOfDay,
-      savedAt: Date.now()
+    const p = G.player;
+    const data = {
+      cash: p.cash, debt: p.debt, hp: p.hp, ammo: p.ammo,
+      x: p.x, y: p.y, missionIdx: G.mission.idx, missionStage: G.mission.stage,
+      nuggets: G.nuggets.filter(n => n.taken).length,
+      nuggetTaken: G.nuggets.map(n => n.taken),
+      dayTime: G.dayTime, stats: G.stats, savedAt: Date.now(),
     };
-    localStorage.setItem(CH.SAVE_KEY, JSON.stringify(data));
-  } catch (e) { /* storage unavailable: play on without saving */ }
-};
+    localStorage.setItem(KEY, JSON.stringify(data));
+    return true;
+  } catch (e) { return false; }
+}
 
-CH.loadGame = function () {
+export function loadSave() {
   try {
-    var raw = localStorage.getItem(CH.SAVE_KEY);
+    const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const d = JSON.parse(raw);
+    if (typeof d.cash !== 'number' || typeof d.missionIdx !== 'number') return null;
+    return d;
   } catch (e) { return null; }
-};
+}
 
-CH.clearSave = function () {
-  try { localStorage.removeItem(CH.SAVE_KEY); } catch (e) { /* ignore */ }
-};
+export function hasSave() { return loadSave() !== null; }
 
-CH.applySave = function (data) {
-  var G = CH.G;
-  if (!data) return false;
-  G.money = data.money || 0;
-  G.missionsDone = data.missionsDone || [];
-  G.nuggets = data.nuggets || 0;
-  (data.nuggetIds || []).forEach(function (id) {
-    var c = CH.COLLECTIBLES[id];
-    if (c) c.taken = true;
-  });
-  if (data.player) {
-    G.player.x = data.player.x; G.player.y = data.player.y;
-    G.player.health = data.player.health || 100;
-    G.player.ammo = data.player.ammo || 24;
+export function clearSave() {
+  try { localStorage.removeItem(KEY); } catch (e) { /* storage unavailable */ }
+}
+
+export function applySave(G, d) {
+  const p = G.player;
+  p.cash = d.cash; p.debt = d.debt; p.hp = d.hp; p.ammo = d.ammo;
+  p.x = d.x; p.y = d.y;
+  p.onFoot = true; p.car = null;
+  G.mission.idx = Math.min(d.missionIdx, 5);
+  G.mission.stage = 0;
+  G.mission.done = false;
+  if (Array.isArray(d.nuggetTaken)) {
+    d.nuggetTaken.forEach((t, i) => { if (G.nuggets[i]) G.nuggets[i].taken = !!t; });
   }
-  if (typeof data.timeOfDay === 'number') G.timeOfDay = data.timeOfDay;
-  return true;
-};
-
-CH.hasSave = function () { return !!CH.loadGame(); };
+  if (typeof d.dayTime === 'number') G.dayTime = d.dayTime;
+  if (d.stats) G.stats = { ...G.stats, ...d.stats };
+}

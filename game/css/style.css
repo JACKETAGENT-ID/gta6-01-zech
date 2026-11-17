@@ -1,70 +1,17 @@
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #1a120a; }
-body { font-family: 'Trebuchet MS', Verdana, sans-serif; color: #f2e8d5; }
-#wrap { position: relative; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
-#game { display: block; background: #d9a05f; image-rendering: auto; }
-
-#hud { position: absolute; inset: 0; pointer-events: none; font-weight: bold; text-shadow: 1px 1px 2px #000; }
-#topLeft { position: absolute; top: 14px; left: 16px; }
-#wantedLabel { font-size: 20px; color: #ffd94d; letter-spacing: 2px; }
-#stars { font-size: 24px; letter-spacing: 3px; }
-#healthBar { width: 220px; height: 14px; background: rgba(0,0,0,0.55); border: 2px solid #000; margin-top: 6px; }
-#healthFill { height: 100%; width: 100%; background: linear-gradient(90deg, #5da85d, #8fd18f); }
-#carHealth { width: 220px; height: 9px; background: rgba(0,0,0,0.55); border: 2px solid #000; margin-top: 4px; display: none; }
-#carFill { height: 100%; width: 100%; background: #e8a13c; }
-#moneyRow { margin-top: 6px; font-size: 20px; color: #7dff8a; }
-#ammo { font-size: 14px; color: #ffd94d; margin-left: 10px; }
-#collect { font-size: 14px; color: #e8a13c; margin-top: 2px; }
-
-#topRight { position: absolute; top: 14px; right: 16px; text-align: right; }
-#minimap { border: 2px solid #000; background: #c9a05f; box-shadow: 0 0 0 2px rgba(255,217,77,0.4); }
-#clock { font-size: 18px; margin-top: 6px; }
-#radio { font-size: 13px; color: #ffd94d; }
-
-#objective {
-  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
-  background: rgba(0,0,0,0.65); border: 1px solid #ffd94d; border-radius: 6px;
-  padding: 8px 18px; font-size: 16px; color: #ffe9a8; white-space: nowrap;
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #1a0f08; height: 100%; }
+body {
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  overflow: hidden;
 }
-#speed {
-  position: absolute; bottom: 64px; right: 24px; font-size: 30px; color: #fff;
-  text-shadow: 2px 2px 3px #000;
+#wrap { position: relative; line-height: 0; }
+#game {
+  display: block;
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+  background: #c98a4b;
+  image-rendering: auto;
+  cursor: crosshair;
 }
-#msg {
-  position: absolute; top: 22%; left: 50%; transform: translateX(-50%);
-  background: rgba(0,0,0,0.7); border: 1px solid #ffd94d; border-radius: 6px;
-  padding: 10px 22px; font-size: 18px; font-weight: bold; color: #ffe9a8;
-  opacity: 0; transition: opacity 0.4s; pointer-events: none; text-align: center;
-}
-#dialog {
-  position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
-  width: 640px; max-width: 80vw; background: rgba(20,12,4,0.92);
-  border: 2px solid #e8a13c; border-radius: 8px; padding: 16px 20px;
-  cursor: pointer; pointer-events: auto;
-}
-#dialogText { font-size: 17px; line-height: 1.5; color: #f2e8d5; }
-#dialogHint { margin-top: 8px; font-size: 12px; color: #e8a13c; text-align: right; }
-
-#startScreen, #pauseScreen, #endScreen {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(ellipse at center, rgba(60,30,5,0.55), rgba(10,5,0,0.88));
-  z-index: 10;
-}
-#pauseScreen, #endScreen { background: rgba(10,5,0,0.75); }
-.titleBox { text-align: center; max-width: 640px; padding: 24px; }
-.titleBox h1 {
-  font-size: 74px; line-height: 0.95; letter-spacing: 4px; color: #ffd94d;
-  text-shadow: 4px 4px 0 #7a2e1a, 8px 8px 18px rgba(0,0,0,0.8);
-}
-.titleBox h2 { font-size: 56px; letter-spacing: 4px; color: #ffd94d; text-shadow: 3px 3px 0 #7a2e1a; }
-.tagline { margin-top: 14px; font-size: 19px; color: #ffe9a8; font-style: italic; }
-.story { margin-top: 12px; font-size: 16px; line-height: 1.5; color: #f2e8d5; }
-.buttons { margin-top: 22px; }
-.buttons button {
-  font-size: 20px; font-weight: bold; letter-spacing: 2px; cursor: pointer;
-  padding: 12px 26px; margin: 0 8px; color: #1a120a; background: #ffd94d;
-  border: 3px solid #7a2e1a; border-radius: 6px;
-}
-.buttons button:hover { background: #ffe9a8; }
-.controls { margin-top: 22px; font-size: 14px; line-height: 1.7; color: #d9c9a8; }
-.credit { margin-top: 16px; font-size: 12px; color: #a89878; }
+#errlog { display: none; }
